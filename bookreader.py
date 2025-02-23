@@ -89,35 +89,37 @@ class BookReader:
 
     def setup_ui(self) -> None:
         """Set up the user interface with a scrollable frame."""
+        # Main frame to hold canvas and scrollbar
         self.main_frame = tk.Frame(self.window)
         self.main_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
+        # Canvas and vertical scrollbar setup
         self.canvas = tk.Canvas(self.main_frame)
         self.v_scrollbar = tk.Scrollbar(self.main_frame, orient=tk.VERTICAL, command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=self.v_scrollbar.set)
 
+        # Pack scrollbar and canvas
         self.v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
+        # Inner frame inside the canvas
         self.inner_frame = tk.Frame(self.canvas)
-        # Removed pack_propagate(0) and set initial width explicitly
-        self.canvas_window = self.canvas.create_window((0, 0), window=self.inner_frame, anchor=tk.NW,
-                                                       width=self.window.winfo_width())
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.inner_frame, anchor=tk.NW)
 
+        # Bind events to handle resizing and scrolling
         self.inner_frame.bind("<Configure>", self.update_scroll_region)
         self.window.bind("<Configure>", self.on_window_resize)
 
+        # Add UI widgets to inner_frame
         self.url_entry = tk.Entry(self.inner_frame, width=40)
         self.url_entry.pack(fill=tk.X, pady=5)
         self.download_button = tk.Button(self.inner_frame, text="Download", command=self.download_url)
         self.download_button.pack(fill=tk.X, pady=5)
         self.error_label = tk.Label(self.inner_frame, text="", fg="red")
         self.error_label.pack(fill=tk.X, pady=5)
-
         self.current_file_label = tk.Label(self.inner_frame, text=os.path.basename(
             self.current_file) if self.current_file else "No file selected")
         self.current_file_label.pack(fill=tk.X, pady=10)
-
         self.select_button = tk.Button(self.inner_frame, text="Select File", command=self.select_file)
         self.select_button.pack(fill=tk.X, pady=5)
         self.play_button = tk.Button(self.inner_frame, text="Play", command=self.play)
@@ -135,17 +137,16 @@ class BookReader:
         self.cancel_button = tk.Button(self.inner_frame, text="Cancel", command=self.cancel, state=tk.DISABLED)
         self.cancel_button.pack(fill=tk.X, pady=5)
 
-        # Playback scrollbar (progress bar) packed first among bottom widgets
+        # Playback scrollbar and status bar at the bottom
         self.playback_scrollbar = tk.Scale(self.window, from_=0, to=100, orient=tk.HORIZONTAL,
                                            command=self.on_scrollbar_move)
         self.playback_scrollbar.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
-
-        # Status bar packed last to ensure it's at the very bottom
         self.status_bar = tk.Label(self.window, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.W)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
-        # Force an initial update of the scroll region after widgets are added
-        self.window.after(0, self.update_scroll_region)
+        # Initial UI updates
+        self.update_button_states()
+        self.update_playback_scrollbar()
 
     def update_scroll_region(self, event=None) -> None:
         """Update the canvas scroll region based on the inner_frame's size."""
@@ -153,7 +154,8 @@ class BookReader:
 
     def on_window_resize(self, event: tk.Event) -> None:
         """Adjust the canvas window size when the window is resized."""
-        self.canvas.itemconfigure(self.canvas_window, width=event.width - self.v_scrollbar.winfo_width())
+        canvas_width = self.canvas.winfo_width()
+        self.canvas.itemconfigure(self.canvas_window, width=canvas_width)
         self.update_scroll_region()
 
     def setup_keybindings(self) -> None:
