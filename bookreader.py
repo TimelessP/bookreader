@@ -79,6 +79,7 @@ class BookReader:
         self.last_folder = str(Path.home())
         self.position = 0
         self.is_playing = False
+        self.is_paused = False
         self.is_processing = False
         self.cancel_processing = False
         self.config_path = Path.home() / ".bookreader_config.json"
@@ -228,24 +229,28 @@ class BookReader:
         return self.duration if self.duration is not None else 0
 
     def update_button_states(self):
-        self.play_button.config(
-            state='normal' if self.current_file and not self.is_playing and not pygame.mixer.music.get_busy() else 'disabled'
-        )
-        self.pause_button.config(
-            state='normal' if self.is_playing else 'disabled'
-        )
-        self.resume_button.config(
-            state='normal' if not self.is_playing and pygame.mixer.music.get_busy() else 'disabled'
-        )
-        self.stop_button.config(
-            state='normal' if pygame.mixer.music.get_busy() else 'disabled'
-        )
-        self.skip_back_button.config(
-            state='normal' if self.current_file else 'disabled'
-        )
-        self.skip_forward_button.config(
-            state='normal' if self.current_file else 'disabled'
-        )
+        if self.current_file and not self.is_playing and not pygame.mixer.music.get_busy():
+            self.play_button.config(state='normal')
+        else:
+            self.play_button.config(state='disabled')
+        if self.is_playing:
+            self.pause_button.config(state='normal')
+        else:
+            self.pause_button.config(state='disabled')
+        if self.is_paused and pygame.mixer.music.get_busy():
+            self.resume_button.config(state='normal')
+        else:
+            self.resume_button.config(state='disabled')
+        if pygame.mixer.music.get_busy():
+            self.stop_button.config(state='normal')
+        else:
+            self.stop_button.config(state='disabled')
+        if self.current_file:
+            self.skip_back_button.config(state='normal')
+            self.skip_forward_button.config(state='normal')
+        else:
+            self.skip_back_button.config(state='disabled')
+            self.skip_forward_button.config(state='disabled')
         self.cancel_button.config(
             state='normal' if self.is_processing else 'disabled'
         )
@@ -271,41 +276,6 @@ class BookReader:
     def on_canvas_configure(self, event):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         self.canvas.itemconfigure(self.canvas_window, width=event.width)
-
-    def _download_url_thread(self, url: str):
-        try:
-            response = requests.get(url, stream=True)
-            response.raise_for_status()
-            file_name = url.split('/')[-1] or "downloaded.txt"
-            if not file_name.endswith('.txt'):
-                file_name += '.txt'
-            download_path = self.temp_dir / file_name
-
-            with open(download_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if self.cancel_processing:
-                        break
-                    f.write(chunk)
-
-            if not self.cancel_processing and os.path.exists(download_path):
-                self.duration = None
-                self.current_file = self.prepare_audio_file(str(download_path))
-                if self.current_file:
-                    self.position = 0
-                    self.set_current_file_label(os.path.basename(self.current_file))
-                    self.calculate_duration()
-                    self.save_config()
-                    self.set_error_label("")
-                    self.set_status_bar("Ready")
-            else:
-                self.set_status_bar("Download cancelled")
-                if os.path.exists(download_path):
-                    os.remove(download_path)
-        except requests.RequestException as e:
-            self.set_error_label(f"Download failed: {str(e)}")
-            self.set_status_bar(f"Download failed: {str(e)}")
-        finally:
-            self.window.after(0, self.update_ui_after_processing)
 
     def _download_url_thread(self, url: str) -> None:
         """Download a file from a URL in a background thread."""
@@ -435,7 +405,8 @@ class BookReader:
                 self.set_status_bar(f"Combining audio: {i + 1}/{total_chunks} chunks")
 
             if combined and not self.cancel_processing:
-                combined.export(output_mp3, format="mp3")
+                # Export with a constant bitrate to avoid decoding issues
+                combined.export(output_mp3, format="mp3", bitrate="128k")
                 return str(output_mp3)
             return None
         elif file_path.endswith(('.wav', '.mp3')) and os.path.exists(file_path):
@@ -452,6 +423,7 @@ class BookReader:
             self.window.after(100, self.update_position)
         else:
             self.is_playing = False
+            self.is_paused = False
             self.position = 0
             self.update_playback_scrollbar()
             self.update_status_bar()
@@ -460,9 +432,13 @@ class BookReader:
     def play(self):
         if not self.current_file:
             return
+        # Reinitialize mixer to avoid state issues
+        pygame.mixer.quit()
+        pygame.mixer.init()
         pygame.mixer.music.load(self.current_file)
         pygame.mixer.music.play(start=self.position)
         self.is_playing = True
+        self.is_paused = False
         self.play_start_time = time.time()
         self.play_start_position = self.position
         self.update_button_states()
@@ -472,14 +448,19 @@ class BookReader:
     def pause(self):
         if self.is_playing and pygame.mixer.music.get_busy():
             pygame.mixer.music.pause()
+            self.is_paused = True
             self.is_playing = False
-            self.update_button_states()
+            self.pause_button.config(state='disabled')
+            self.resume_button.config(state='normal')
             self.update_status_bar()
 
     def resume(self):
-        if not self.is_playing and pygame.mixer.music.get_busy():
+        if self.is_paused and pygame.mixer.music.get_busy():
             pygame.mixer.music.unpause()
+            self.is_paused = False
             self.is_playing = True
+            self.resume_button.config(state='disabled')
+            self.pause_button.config(state='normal')
             self.play_start_time = time.time()
             self.play_start_position = self.position
             self.status_bar.config(text="Playing...")
@@ -489,6 +470,7 @@ class BookReader:
         if pygame.mixer.music.get_busy():
             pygame.mixer.music.stop()
         self.is_playing = False
+        self.is_paused = False
         self.position = 0
         self.update_playback_scrollbar()
         self.save_config()
@@ -564,10 +546,10 @@ class BookReader:
             self.status_bar.config(text="Calculating duration...")
         elif self.is_playing or pygame.mixer.music.get_busy():
             self.status_bar.config(
-                text=f"Playing - Position: {self.format_time(self.position)} / Total: {self.format_time(total)} / Remaining: {self.format_time(max(0, total - self.position))}")
+                text=f"Playing - Position: {self.format_time(int(self.position))} / Total: {self.format_time(total)} / Remaining: {self.format_time(max(0, total - int(self.position)))}")
         elif self.current_file:
             self.status_bar.config(
-                text=f"Stopped - Position: {self.format_time(self.position)} / Total: {self.format_time(total)} / Remaining: {self.format_time(max(0, total - self.position))}")
+                text=f"Stopped - Position: {self.format_time(int(self.position))} / Total: {self.format_time(total)} / Remaining: {self.format_time(max(0, total - int(self.position)))}")
         else:
             self.status_bar.config(text="Ready")
 
