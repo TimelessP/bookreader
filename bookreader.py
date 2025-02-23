@@ -59,11 +59,12 @@ class BookReader:
         pygame.mixer.init()
         self.window = tk.Tk()
         self.window.title("Book Reader")
-        self.window.geometry("400x650")
+        self.window.geometry("400x650")  # Minimum height includes controls, scrollbar, and status bar
+        self.window.minsize(400, 350)  # Minimum height for scrollbar and status bar
 
         self.tts = TTS()
         self.current_file = None
-        self.last_folder = str(Path.home())  # Default to home directory
+        self.last_folder = str(Path.home())
         self.position = 0
         self.is_playing = False
         self.is_processing = False
@@ -76,44 +77,68 @@ class BookReader:
         self.setup_keybindings()
 
     def setup_ui(self):
-        self.url_entry = tk.Entry(self.window, width=40)
-        self.url_entry.pack(pady=5)
-        self.download_button = tk.Button(self.window, text="Download", command=self.download_url)
-        self.download_button.pack(pady=5)
-        self.error_label = tk.Label(self.window, text="", fg="red")
-        self.error_label.pack(pady=5)
+        # Main frame with vertical scrollbar
+        self.main_frame = tk.Frame(self.window)
+        self.main_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.current_file_label = tk.Label(self.window, text=self.current_file or "No file selected")
-        self.current_file_label.pack(pady=10)
+        self.canvas = tk.Canvas(self.main_frame)
+        self.v_scrollbar = tk.Scrollbar(self.main_frame, orient=tk.VERTICAL, command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.v_scrollbar.set)
 
-        self.position_label = tk.Label(self.window, text="Position: 00:00:00")
-        self.position_label.pack(pady=5)
-        self.total_time_label = tk.Label(self.window, text="Total: 00:00:00")
-        self.total_time_label.pack(pady=5)
-        self.remaining_time_label = tk.Label(self.window, text="Remaining: 00:00:00")
-        self.remaining_time_label.pack(pady=5)
+        self.v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self.select_button = tk.Button(self.window, text="Select File", command=self.select_file)
-        self.select_button.pack(pady=5)
-        self.play_button = tk.Button(self.window, text="Play", command=self.play)
-        self.play_button.pack(pady=5)
-        self.pause_button = tk.Button(self.window, text="Pause", command=self.pause)
-        self.pause_button.pack(pady=5)
-        self.resume_button = tk.Button(self.window, text="Resume", command=self.resume)
-        self.resume_button.pack(pady=5)
-        self.stop_button = tk.Button(self.window, text="Stop", command=self.stop)
-        self.stop_button.pack(pady=5)
-        self.skip_back_button = tk.Button(self.window, text="< 10s", command=self.skip_backward)
-        self.skip_back_button.pack(pady=5)
-        self.skip_forward_button = tk.Button(self.window, text="10s >", command=self.skip_forward)
-        self.skip_forward_button.pack(pady=5)
-        self.cancel_button = tk.Button(self.window, text="Cancel", command=self.cancel, state=tk.DISABLED)
-        self.cancel_button.pack(pady=5)
+        self.inner_frame = tk.Frame(self.canvas)
+        self.canvas.create_window((0, 0), window=self.inner_frame, anchor=tk.NW, width=self.window.winfo_screenwidth())
 
+        # Bind configure to update scroll region
+        self.inner_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.window.bind("<Configure>", self.on_window_resize)
+
+        # Controls anchored to top
+        self.url_entry = tk.Entry(self.inner_frame, width=40)
+        self.url_entry.pack(fill=tk.X, pady=5)
+        self.download_button = tk.Button(self.inner_frame, text="Download", command=self.download_url)
+        self.download_button.pack(fill=tk.X, pady=5)
+        self.error_label = tk.Label(self.inner_frame, text="", fg="red")
+        self.error_label.pack(fill=tk.X, pady=5)
+
+        self.current_file_label = tk.Label(self.inner_frame, text=self.current_file or "No file selected")
+        self.current_file_label.pack(fill=tk.X, pady=10)
+
+        self.select_button = tk.Button(self.inner_frame, text="Select File", command=self.select_file)
+        self.select_button.pack(fill=tk.X, pady=5)
+        self.play_button = tk.Button(self.inner_frame, text="Play", command=self.play)
+        self.play_button.pack(fill=tk.X, pady=5)
+        self.pause_button = tk.Button(self.inner_frame, text="Pause", command=self.pause)
+        self.pause_button.pack(fill=tk.X, pady=5)
+        self.resume_button = tk.Button(self.inner_frame, text="Resume", command=self.resume)
+        self.resume_button.pack(fill=tk.X, pady=5)
+        self.stop_button = tk.Button(self.inner_frame, text="Stop", command=self.stop)
+        self.stop_button.pack(fill=tk.X, pady=5)
+        self.skip_back_button = tk.Button(self.inner_frame, text="< 10s", command=self.skip_backward)
+        self.skip_back_button.pack(fill=tk.X, pady=5)
+        self.skip_forward_button = tk.Button(self.inner_frame, text="10s >", command=self.skip_forward)
+        self.skip_forward_button.pack(fill=tk.X, pady=5)
+        self.cancel_button = tk.Button(self.inner_frame, text="Cancel", command=self.cancel, state=tk.DISABLED)
+        self.cancel_button.pack(fill=tk.X, pady=5)
+
+        # Playback scrollbar (outside scrollable area)
+        self.playback_scrollbar = tk.Scale(self.window, from_=0, to=100, orient=tk.HORIZONTAL,
+                                           command=self.on_scrollbar_move)
+        self.playback_scrollbar.pack(fill=tk.X, side=tk.BOTTOM, pady=5)
+
+        # Status bar (outside scrollable area)
         self.status_bar = tk.Label(self.window, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.W)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
         self.update_button_states()
+        self.update_playback_scrollbar()
+
+    def on_window_resize(self, event):
+        self.canvas.itemconfig(self.canvas.create_window((0, 0), window=self.inner_frame, anchor=tk.NW),
+                               width=event.width)
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def setup_keybindings(self):
         self.window.bind("<space>", self.toggle_playback)
@@ -127,6 +152,7 @@ class BookReader:
                 self.last_folder = config.get('last_folder', str(Path.home()))
             if self.current_file and os.path.exists(self.current_file):
                 self.audio_file = self.current_file
+                self.update_playback_scrollbar()
 
     def save_config(self):
         config = {
@@ -159,15 +185,36 @@ class BookReader:
             self.skip_back_button.config(state=tk.NORMAL if self.current_file else tk.DISABLED)
             self.skip_forward_button.config(state=tk.NORMAL if self.current_file else tk.DISABLED)
             self.cancel_button.config(state=tk.DISABLED)
+        if not self.is_processing and not self.is_playing and not pygame.mixer.music.get_busy():
+            self.status_bar.config(text="Ready")
+
+    def update_playback_scrollbar(self):
+        total = self.get_audio_duration()
+        if total > 0:
+            self.playback_scrollbar.config(to=total, resolution=1)
+            self.playback_scrollbar.set(self.position)
+        else:
+            self.playback_scrollbar.config(to=100, resolution=1)
+            self.playback_scrollbar.set(0)
+
+    def on_scrollbar_move(self, value):
+        self.position = int(float(value))
+        self.update_status_bar()
+        if self.is_playing:
+            pygame.mixer.music.stop()
+            self.play()
+        self.save_config()
 
     def download_url(self):
         url = self.url_entry.get().strip()
         if not url:
             self.error_label.config(text="Please enter a URL")
+            self.status_bar.config(text="Error: No URL provided")
             return
 
         self.is_processing = True
         self.cancel_processing = False
+        self.status_bar.config(text="Downloading...")
         self.update_button_states()
         threading.Thread(target=self._download_url_thread, args=(url,)).start()
 
@@ -190,7 +237,7 @@ class BookReader:
                 self.position = 0
                 self.current_file_label.config(
                     text=os.path.basename(self.current_file) if self.current_file else "No file selected")
-                self.update_time_labels()
+                self.update_playback_scrollbar()
                 self.save_config()
                 self.error_label.config(text="")
                 self.status_bar.config(text="Ready")
@@ -198,7 +245,7 @@ class BookReader:
                 self.status_bar.config(text="")
         except requests.RequestException as e:
             self.error_label.config(text=f"Download failed: {str(e)}")
-            self.status_bar.config(text="")
+            self.status_bar.config(text=f"Download failed: {str(e)}")
         finally:
             self.is_processing = False
             self.update_button_states()
@@ -212,6 +259,7 @@ class BookReader:
             self.last_folder = str(Path(file_path).parent)
             self.is_processing = True
             self.cancel_processing = False
+            self.status_bar.config(text="Loading file...")
             self.update_button_states()
             threading.Thread(target=self._select_file_thread, args=(file_path,)).start()
 
@@ -221,7 +269,7 @@ class BookReader:
             self.position = 0
             self.current_file_label.config(
                 text=os.path.basename(self.current_file) if self.current_file else "No file selected")
-            self.update_time_labels()
+            self.update_playback_scrollbar()
             self.save_config()
             self.error_label.config(text="")
             self.status_bar.config(text="Ready")
@@ -287,13 +335,12 @@ class BookReader:
                     combined = None
                     break
                 combined += AudioSegment.from_wav(wav)
-                os.remove(wav)  # Clean up WAV files as we go
+                os.remove(wav)
                 self.status_bar.config(text=f"Combining audio: {i + 1}/{total_chunks} chunks")
                 self.window.update_idletasks()
 
             if combined and not self.cancel_processing:
                 combined.export(output_mp3, format="mp3")
-                # Clean up any remaining WAV files
                 for wav in wav_files:
                     if os.path.exists(wav):
                         os.remove(wav)
@@ -315,17 +362,20 @@ class BookReader:
         while pygame.mixer.music.get_busy() and self.is_playing:
             elapsed = time.time() - start_time
             self.position = int(elapsed + self.position)
-            self.update_time_labels()
+            self.update_playback_scrollbar()
+            self.update_status_bar()
             self.update_button_states()
             time.sleep(1)
 
         self.is_playing = False
         self.update_button_states()
+        self.update_status_bar()
 
     def play(self):
         if not self.current_file or (self.is_playing and pygame.mixer.music.get_busy()):
             return
 
+        self.status_bar.config(text="Playing...")
         threading.Thread(target=self.play_audio).start()
 
     def pause(self):
@@ -334,11 +384,13 @@ class BookReader:
             self.is_playing = False
             self.save_config()
             self.update_button_states()
+            self.update_status_bar()
 
     def resume(self):
         if not self.is_playing and pygame.mixer.music.get_busy():
             pygame.mixer.music.unpause()
             self.is_playing = True
+            self.status_bar.config(text="Playing...")
             threading.Thread(target=self.update_position_while_playing).start()
 
     def stop(self):
@@ -346,9 +398,10 @@ class BookReader:
             pygame.mixer.music.stop()
         self.is_playing = False
         self.position = 0
-        self.update_time_labels()
+        self.update_playback_scrollbar()
         self.save_config()
         self.update_button_states()
+        self.status_bar.config(text="Ready")
 
     def skip_backward(self):
         if self.current_file:
@@ -356,7 +409,8 @@ class BookReader:
             if self.is_playing:
                 pygame.mixer.music.stop()
                 self.play()
-            self.update_time_labels()
+            self.update_playback_scrollbar()
+            self.update_status_bar()
             self.save_config()
 
     def skip_forward(self):
@@ -366,7 +420,8 @@ class BookReader:
             if self.is_playing:
                 pygame.mixer.music.stop()
                 self.play()
-            self.update_time_labels()
+            self.update_playback_scrollbar()
+            self.update_status_bar()
             self.save_config()
 
     def cancel(self):
@@ -376,7 +431,8 @@ class BookReader:
     def update_position_while_playing(self):
         while self.is_playing and pygame.mixer.music.get_busy():
             self.position += 1
-            self.update_time_labels()
+            self.update_playback_scrollbar()
+            self.update_status_bar()
             self.update_button_states()
             time.sleep(1)
 
@@ -402,11 +458,18 @@ class BookReader:
         secs = seconds % 60
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
-    def update_time_labels(self):
+    def update_status_bar(self):
+        if self.is_processing:
+            return  # Let processing messages take precedence
         total = self.get_audio_duration()
-        self.position_label.config(text=f"Position: {self.format_time(self.position)}")
-        self.total_time_label.config(text=f"Total: {self.format_time(total)}")
-        self.remaining_time_label.config(text=f"Remaining: {self.format_time(max(0, total - self.position))}")
+        if self.is_playing or pygame.mixer.music.get_busy():
+            self.status_bar.config(
+                text=f"Playing - Position: {self.format_time(self.position)} / Total: {self.format_time(total)} / Remaining: {self.format_time(max(0, total - self.position))}")
+        elif self.current_file:
+            self.status_bar.config(
+                text=f"Stopped - Position: {self.format_time(self.position)} / Total: {self.format_time(total)} / Remaining: {self.format_time(max(0, total - self.position))}")
+        else:
+            self.status_bar.config(text="Ready")
 
     def run(self):
         self.window.mainloop()
