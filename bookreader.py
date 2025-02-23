@@ -1,8 +1,4 @@
 import contextlib
-with contextlib.redirect_stdout(None):
-    import pygame
-    pygame.mixer.init()
-
 import json
 import os
 import threading
@@ -12,9 +8,13 @@ import wave
 from pathlib import Path
 from tkinter import filedialog
 from typing import Union
+
 import mutagen
 import piper
-import pygame.mixer
+
+with contextlib.redirect_stdout(None):  # Suppress pygame welcome message
+    import pygame.mixer
+
 import requests
 from pydub import AudioSegment
 
@@ -65,6 +65,8 @@ class TTS:
 
 class BookReader:
     def __init__(self):
+        """Initialize the BookReader application."""
+        pygame.mixer.init()
         self.window = tk.Tk()
         self.window.title("Book Reader")
         self.window.geometry("400x650")
@@ -89,39 +91,48 @@ class BookReader:
         if self.current_file:
             self.calculate_duration()
 
+    def download_url(self) -> None:
+        """Download a file from a URL."""
+        url = self.url_entry.get().strip()
+        if not url:
+            self.set_error_label("URL is empty")
+            return
+        self.is_processing = True
+        self.cancel_processing = False
+        self.status_bar.config(text="Downloading...")
+        self.update_button_states()
+        threading.Thread(target=self._download_url_thread, args=(url,), daemon=True).start()
+
     def setup_ui(self) -> None:
         """Set up the user interface with a scrollable frame."""
-        # Main frame to hold canvas and scrollbar
         self.main_frame = tk.Frame(self.window)
         self.main_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-        # Canvas and vertical scrollbar setup
         self.canvas = tk.Canvas(self.main_frame)
         self.v_scrollbar = tk.Scrollbar(self.main_frame, orient=tk.VERTICAL, command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=self.v_scrollbar.set)
 
-        # Pack scrollbar and canvas
         self.v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # Inner frame inside the canvas
         self.inner_frame = tk.Frame(self.canvas)
-        self.canvas_window = self.canvas.create_window((0, 0), window=self.inner_frame, anchor=tk.NW)
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.inner_frame, anchor=tk.NW,
+                                                       width=self.window.winfo_width())
 
-        # Bind events to handle resizing and scrolling
         self.inner_frame.bind("<Configure>", self.update_scroll_region)
-        self.window.bind("<Configure>", self.on_window_resize)
+        self.canvas.bind("<Configure>", self.on_canvas_configure)
 
-        # Add UI widgets to inner_frame
         self.url_entry = tk.Entry(self.inner_frame, width=40)
         self.url_entry.pack(fill=tk.X, pady=5)
         self.download_button = tk.Button(self.inner_frame, text="Download", command=self.download_url)
         self.download_button.pack(fill=tk.X, pady=5)
         self.error_label = tk.Label(self.inner_frame, text="", fg="red")
         self.error_label.pack(fill=tk.X, pady=5)
+
         self.current_file_label = tk.Label(self.inner_frame, text=os.path.basename(
             self.current_file) if self.current_file else "No file selected")
         self.current_file_label.pack(fill=tk.X, pady=10)
+
         self.select_button = tk.Button(self.inner_frame, text="Select File", command=self.select_file)
         self.select_button.pack(fill=tk.X, pady=5)
         self.play_button = tk.Button(self.inner_frame, text="Play", command=self.play)
@@ -139,26 +150,19 @@ class BookReader:
         self.cancel_button = tk.Button(self.inner_frame, text="Cancel", command=self.cancel, state=tk.DISABLED)
         self.cancel_button.pack(fill=tk.X, pady=5)
 
-        # Playback scrollbar and status bar at the bottom
         self.playback_scrollbar = tk.Scale(self.window, from_=0, to=100, orient=tk.HORIZONTAL,
                                            command=self.on_scrollbar_move)
         self.playback_scrollbar.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
+
         self.status_bar = tk.Label(self.window, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.W)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
-        # Initial UI updates
         self.update_button_states()
         self.update_playback_scrollbar()
 
     def update_scroll_region(self, event=None) -> None:
         """Update the canvas scroll region based on the inner_frame's size."""
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-
-    def on_window_resize(self, event: tk.Event) -> None:
-        """Adjust the canvas window size when the window is resized."""
-        canvas_width = self.canvas.winfo_width()
-        self.canvas.itemconfigure(self.canvas_window, width=canvas_width)
-        self.update_scroll_region()
 
     def setup_keybindings(self) -> None:
         """Set up keyboard shortcuts."""
@@ -205,8 +209,7 @@ class BookReader:
             self.status_bar.config(text="Calculating duration...")
             threading.Thread(target=self._calculate_duration_thread, daemon=True).start()
 
-    def _calculate_duration_thread(self) -> None:
-        """Calculate the audio duration using mutagen in a background thread."""
+    def _calculate_duration_thread(self):
         try:
             audio = mutagen.File(self.current_file)
             self.duration = int(audio.info.length)
@@ -224,31 +227,28 @@ class BookReader:
         """Return the cached audio duration, or 0 if not yet calculated."""
         return self.duration if self.duration is not None else 0
 
-    def update_button_states(self) -> None:
-        """Update the state of buttons based on current conditions."""
-        if self.is_processing:
-            self.download_button.config(state=tk.DISABLED)
-            self.select_button.config(state=tk.DISABLED)
-            self.play_button.config(state=tk.DISABLED)
-            self.pause_button.config(state=tk.DISABLED)
-            self.resume_button.config(state=tk.DISABLED)
-            self.stop_button.config(state=tk.DISABLED)
-            self.skip_back_button.config(state=tk.DISABLED)
-            self.skip_forward_button.config(state=tk.DISABLED)
-            self.cancel_button.config(state=tk.NORMAL)
-        else:
-            self.download_button.config(state=tk.NORMAL)
-            self.select_button.config(state=tk.NORMAL)
-            self.play_button.config(state=tk.NORMAL if self.current_file else tk.DISABLED)
-            self.pause_button.config(state=tk.NORMAL if self.is_playing else tk.DISABLED)
-            self.resume_button.config(
-                state=tk.NORMAL if not self.is_playing and pygame.mixer.music.get_busy() else tk.DISABLED)
-            self.stop_button.config(state=tk.NORMAL if pygame.mixer.music.get_busy() else tk.DISABLED)
-            self.skip_back_button.config(state=tk.NORMAL if self.current_file else tk.DISABLED)
-            self.skip_forward_button.config(state=tk.NORMAL if self.current_file else tk.DISABLED)
-            self.cancel_button.config(state=tk.DISABLED)
-        if not self.is_processing and not self.is_playing and not pygame.mixer.music.get_busy():
-            self.status_bar.config(text="Ready")
+    def update_button_states(self):
+        self.play_button.config(
+            state='normal' if self.current_file and not self.is_playing and not pygame.mixer.music.get_busy() else 'disabled'
+        )
+        self.pause_button.config(
+            state='normal' if self.is_playing else 'disabled'
+        )
+        self.resume_button.config(
+            state='normal' if not self.is_playing and pygame.mixer.music.get_busy() else 'disabled'
+        )
+        self.stop_button.config(
+            state='normal' if pygame.mixer.music.get_busy() else 'disabled'
+        )
+        self.skip_back_button.config(
+            state='normal' if self.current_file else 'disabled'
+        )
+        self.skip_forward_button.config(
+            state='normal' if self.current_file else 'disabled'
+        )
+        self.cancel_button.config(
+            state='normal' if self.is_processing else 'disabled'
+        )
 
     def update_playback_scrollbar(self) -> None:
         """Update the playback scrollbar based on the current duration and position."""
@@ -268,19 +268,44 @@ class BookReader:
             self.play()
         self.save_config()
 
-    def download_url(self) -> None:
-        """Initiate downloading a file from a URL."""
-        url = self.url_entry.get().strip()
-        if not url:
-            self.error_label.config(text="Please enter a URL")
-            self.status_bar.config(text="Error: No URL provided")
-            return
+    def on_canvas_configure(self, event):
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self.canvas.itemconfigure(self.canvas_window, width=event.width)
 
-        self.is_processing = True
-        self.cancel_processing = False
-        self.status_bar.config(text="Downloading...")
-        self.update_button_states()
-        threading.Thread(target=self._download_url_thread, args=(url,), daemon=True).start()
+    def _download_url_thread(self, url: str):
+        try:
+            response = requests.get(url, stream=True)
+            response.raise_for_status()
+            file_name = url.split('/')[-1] or "downloaded.txt"
+            if not file_name.endswith('.txt'):
+                file_name += '.txt'
+            download_path = self.temp_dir / file_name
+
+            with open(download_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if self.cancel_processing:
+                        break
+                    f.write(chunk)
+
+            if not self.cancel_processing and os.path.exists(download_path):
+                self.duration = None
+                self.current_file = self.prepare_audio_file(str(download_path))
+                if self.current_file:
+                    self.position = 0
+                    self.set_current_file_label(os.path.basename(self.current_file))
+                    self.calculate_duration()
+                    self.save_config()
+                    self.set_error_label("")
+                    self.set_status_bar("Ready")
+            else:
+                self.set_status_bar("Download cancelled")
+                if os.path.exists(download_path):
+                    os.remove(download_path)
+        except requests.RequestException as e:
+            self.set_error_label(f"Download failed: {str(e)}")
+            self.set_status_bar(f"Download failed: {str(e)}")
+        finally:
+            self.window.after(0, self.update_ui_after_processing)
 
     def _download_url_thread(self, url: str) -> None:
         """Download a file from a URL in a background thread."""
@@ -333,21 +358,19 @@ class BookReader:
             self.update_button_states()
             threading.Thread(target=self._select_file_thread, args=(file_path,), daemon=True).start()
 
-    def _select_file_thread(self, file_path: str) -> None:
-        """Process the selected file in a background thread."""
+    def _select_file_thread(self, file_path: str):
         self.duration = None
         self.current_file = self.prepare_audio_file(file_path)
         if not self.cancel_processing and self.current_file:
             self.position = 0
-            self.current_file_label.config(text=os.path.basename(self.current_file))
+            self.set_current_file_label(os.path.basename(self.current_file))
             self.calculate_duration()
             self.save_config()
-            self.error_label.config(text="")
-            self.status_bar.config(text="Ready")
+            self.set_error_label("")
+            self.set_status_bar("Ready")
         else:
-            self.status_bar.config(text="File selection cancelled")
-        self.is_processing = False
-        self.update_button_states()
+            self.set_status_bar("File selection cancelled")
+        self.window.after(0, self.update_ui_after_processing)
 
     def smart_chunk_text(self, text: str, base_size: int = 1000, max_extra: int = 512) -> list:
         """Split text into chunks at logical boundaries."""
@@ -372,130 +395,97 @@ class BookReader:
         return chunks
 
     def prepare_audio_file(self, file_path: str) -> Union[str, None]:
-        """Prepare an audio file from a text or audio file."""
         output_mp3 = self.temp_dir / f"{Path(file_path).stem}.mp3"
 
         if file_path.endswith('.txt'):
             with open(file_path, 'r', encoding='utf-8') as f:
                 text = f.read().strip()
             if not text:
-                self.error_label.config(text="Text file is empty")
+                self.set_error_label("Text file is empty")
                 return None
 
-            chunks = self.smart_chunk_text(text)  # Assuming this splits text into chunks
-            if not chunks:
-                self.error_label.config(text="No valid text chunks to process")
-                return None
-
+            chunks = self.smart_chunk_text(text)
             wav_files = []
             total_chunks = len(chunks)
 
             for i, chunk in enumerate(chunks):
-                if self.cancel_processing:  # Assuming cancel flag exists
+                if self.cancel_processing:
                     for wav in wav_files:
                         if os.path.exists(wav):
                             os.remove(wav)
                     return None
                 temp_wav = self.temp_dir / f"chunk_{i}.wav"
-                self.tts.synthesize_to_file(chunk, temp_wav)  # Assuming TTS method
+                self.tts.synthesize_to_file(chunk, temp_wav)
                 wav_files.append(temp_wav)
-                self.status_bar.config(text=f"Converting TTS: {i + 1}/{total_chunks} chunks")
-                self.window.update_idletasks()
+                self.set_status_bar(f"Converting TTS: {i + 1}/{total_chunks} chunks")
+
+            if self.cancel_processing:
+                for wav in wav_files:
+                    if os.path.exists(wav):
+                        os.remove(wav)
+                return None
 
             combined = AudioSegment.empty()
             for i, wav in enumerate(wav_files):
-                try:
-                    segment = AudioSegment.from_wav(wav)
-                    if len(segment) > 0:  # Skip empty segments
-                        combined += segment
-                    else:
-                        print(f"Warning: Empty WAV file {wav}")
-                except Exception as e:
-                    print(f"Error processing WAV file {wav}: {e}")
-                finally:
-                    os.remove(wav)
-                self.status_bar.config(text=f"Combining audio: {i + 1}/{total_chunks} chunks")
-                self.window.update_idletasks()
+                if self.cancel_processing:
+                    combined = None
+                    break
+                combined += AudioSegment.from_wav(wav)
+                os.remove(wav)
+                self.set_status_bar(f"Combining audio: {i + 1}/{total_chunks} chunks")
 
             if combined and not self.cancel_processing:
-                try:
-                    combined.export(output_mp3, format="mp3", bitrate="192k")  # Standard bitrate
-                    return str(output_mp3)
-                except Exception as e:
-                    print(f"Error exporting MP3: {e}")
-                    self.error_label.config(text="Failed to export MP3")
-                    return None
+                combined.export(output_mp3, format="mp3")
+                return str(output_mp3)
             return None
         elif file_path.endswith(('.wav', '.mp3')) and os.path.exists(file_path):
             return file_path
         return None
 
-    def play_audio(self) -> None:
-        """Play the audio file from the current position without looping."""
-        if not self.current_file or not os.path.exists(self.current_file):
-            self.error_label.config(text="No valid audio file to play")
-            return
-
-        try:
-            pygame.mixer.music.load(self.current_file)  # Load the file once
-            pygame.mixer.music.play(start=self.position)  # Start at the current position (in seconds)
-        except pygame.error as e:
-            self.error_label.config(text="Failed to play audio file")
+    def update_position(self):
+        if self.is_playing and pygame.mixer.music.get_busy():
+            current_time = time.time()
+            elapsed = current_time - self.play_start_time
+            self.position = self.play_start_position + elapsed
+            self.update_playback_scrollbar()
+            self.update_status_bar()
+            self.window.after(100, self.update_position)
+        else:
             self.is_playing = False
+            self.position = 0
+            self.update_playback_scrollbar()
+            self.update_status_bar()
             self.update_button_states()
+
+    def play(self):
+        if not self.current_file:
             return
-
+        pygame.mixer.music.load(self.current_file)
+        pygame.mixer.music.play(start=self.position)
         self.is_playing = True
-        while pygame.mixer.music.get_busy() and self.is_playing:
-            # Update position using get_pos()
-            pos_ms = pygame.mixer.music.get_pos()  # Returns time in milliseconds
-            if pos_ms >= 0:
-                self.position += pos_ms / 1000.0  # Convert to seconds and accumulate
-                self.update_playback_scrollbar()  # Update UI if applicable
-                self.update_status_bar()
-            self.update_button_states()
-            time.sleep(1.0)  # Check every second
-
-        # Playback finished or stopped
-        self.is_playing = False
-        self.position = 0  # Reset position when done
+        self.play_start_time = time.time()
+        self.play_start_position = self.position
         self.update_button_states()
         self.update_status_bar()
+        self.window.after(100, self.update_position)
 
-    def play(self) -> None:
-        """Start or restart playback."""
-        if not self.current_file or (self.is_playing and pygame.mixer.music.get_busy()):
-            return
-
-        self.status_bar.config(text="Playing...")
-        threading.Thread(target=self.play_audio, daemon=True).start()
-
-    def update_button_states(self) -> None:
-        """Update button states based on playback conditions."""
-        self.play_button.config(state='normal' if self.current_file and not self.is_playing else 'disabled')
-        self.pause_button.config(state='normal' if self.is_playing else 'disabled')
-        self.resume_button.config(
-            state='normal' if not self.is_playing and pygame.mixer.music.get_busy() else 'disabled')
-        self.stop_button.config(state='normal' if pygame.mixer.music.get_busy() else 'disabled')
-
-    def pause(self) -> None:
-        """Pause the current playback."""
+    def pause(self):
         if self.is_playing and pygame.mixer.music.get_busy():
-            pygame.mixer.music.pause()  # Pause the audio
-            self.is_playing = False  # Update playing state
-            self.update_button_states()  # Refresh button states
-            self.update_status_bar()  # Update UI
-
-    def resume(self) -> None:
-        """Resume paused playback."""
-        if not self.is_playing and pygame.mixer.music.get_busy():
-            pygame.mixer.music.unpause()
-            self.is_playing = True
+            pygame.mixer.music.pause()
+            self.is_playing = False
             self.update_button_states()
             self.update_status_bar()
 
-    def stop(self) -> None:
-        """Stop playback and reset position."""
+    def resume(self):
+        if not self.is_playing and pygame.mixer.music.get_busy():
+            pygame.mixer.music.unpause()
+            self.is_playing = True
+            self.play_start_time = time.time()
+            self.play_start_position = self.position
+            self.status_bar.config(text="Playing...")
+            self.window.after(100, self.update_position)
+
+    def stop(self):
         if pygame.mixer.music.get_busy():
             pygame.mixer.music.stop()
         self.is_playing = False
@@ -505,27 +495,27 @@ class BookReader:
         self.update_button_states()
         self.status_bar.config(text="Ready")
 
-    def skip_backward(self) -> None:
-        """Skip 10 seconds backward."""
-        if self.current_file:
-            self.position = max(0, self.position - 10)
-            if self.is_playing:
-                pygame.mixer.music.stop()
-                self.play()
-            self.update_playback_scrollbar()
-            self.update_status_bar()
-            self.save_config()
-
-    def skip_forward(self) -> None:
-        """Skip 10 seconds forward."""
+    def skip_forward(self):
         if self.current_file:
             total = self.get_audio_duration()
             self.position = min(total, self.position + 10) if total > 0 else self.position + 10
             if self.is_playing:
                 pygame.mixer.music.stop()
                 self.play()
-            self.update_playback_scrollbar()
-            self.update_status_bar()
+            else:
+                self.update_playback_scrollbar()
+                self.update_status_bar()
+            self.save_config()
+
+    def skip_backward(self):
+        if self.current_file:
+            self.position = max(0, self.position - 10)
+            if self.is_playing:
+                pygame.mixer.music.stop()
+                self.play()
+            else:
+                self.update_playback_scrollbar()
+                self.update_status_bar()
             self.save_config()
 
     def cancel(self) -> None:
@@ -544,11 +534,26 @@ class BookReader:
         else:
             self.resume()
 
-    def format_time(self, seconds: float) -> str:
+    def format_time(self, seconds: int) -> str:
+        """Format seconds into HH:MM:SS."""
         hours = seconds // 3600
         minutes = (seconds % 3600) // 60
         secs = seconds % 60
-        return f"{int(hours):02d}:{int(minutes):02d}:{int(secs):02d}"
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+    def set_status_bar(self, text):
+        self.window.after(0, lambda: self.status_bar.config(text=text))
+
+    def set_current_file_label(self, text):
+        self.window.after(0, lambda: self.current_file_label.config(text=text))
+
+    def set_error_label(self, text):
+        self.window.after(0, lambda: self.error_label.config(text=text))
+
+    def update_ui_after_processing(self):
+        self.is_processing = False
+        self.update_button_states()
+        self.set_status_bar("Ready")
 
     def update_status_bar(self) -> None:
         """Update the status bar with current playback information."""
