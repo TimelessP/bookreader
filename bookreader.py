@@ -539,7 +539,7 @@ class BookReader:
         hours = seconds // 3600
         minutes = (seconds % 3600) // 60
         secs = seconds % 60
-        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        return f"{int(hours):02d}:{int(minutes):02d}:{int(secs):02d}"
 
     def set_status_bar(self, text):
         self.window.after(0, lambda: self.status_bar.config(text=text))
