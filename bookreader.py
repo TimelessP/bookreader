@@ -77,7 +77,7 @@ class BookReader:
         self.current_file = None
         self.duration = None
         self.last_folder = str(Path.home())
-        self.position = 0
+        self.position = 0.0   # in seconds
         self.is_playing = False
         self.is_paused = False
         self.is_processing = False
@@ -85,6 +85,9 @@ class BookReader:
         self.config_path = Path.home() / ".bookreader_config.json"
         self.temp_dir = Path(".temp_audio")
         self.temp_dir.mkdir(exist_ok=True)
+
+        # Flag to suspend scrollbar event while programmatically updating its value
+        self.suspend_scroll_event = False
 
         self.setup_ui()
         self.load_config()
@@ -229,19 +232,23 @@ class BookReader:
         return self.duration if self.duration is not None else 0
 
     def update_button_states(self):
+        # Play button enabled only if a file is selected and not currently playing
         if self.current_file and not self.is_playing and not pygame.mixer.music.get_busy():
             self.play_button.config(state='normal')
         else:
             self.play_button.config(state='disabled')
+        # Pause enabled only when playing
         if self.is_playing:
             self.pause_button.config(state='normal')
         else:
             self.pause_button.config(state='disabled')
-        if self.is_paused and pygame.mixer.music.get_busy():
+        # Resume enabled only when paused
+        if self.is_paused:
             self.resume_button.config(state='normal')
         else:
             self.resume_button.config(state='disabled')
-        if pygame.mixer.music.get_busy():
+        # Stop enabled if something is playing or paused
+        if pygame.mixer.music.get_busy() or self.is_paused:
             self.stop_button.config(state='normal')
         else:
             self.stop_button.config(state='disabled')
@@ -251,24 +258,32 @@ class BookReader:
         else:
             self.skip_back_button.config(state='disabled')
             self.skip_forward_button.config(state='disabled')
-        self.cancel_button.config(
-            state='normal' if self.is_processing else 'disabled'
-        )
+        self.cancel_button.config(state='normal' if self.is_processing else 'disabled')
 
     def update_playback_scrollbar(self) -> None:
         """Update the playback scrollbar based on the current duration and position."""
         if self.duration is not None:
             self.playback_scrollbar.config(to=self.duration, resolution=1)
-            self.playback_scrollbar.set(self.position)
         else:
             self.playback_scrollbar.config(to=100, resolution=1)
-            self.playback_scrollbar.set(0)
+        # Suspend the callback when updating the scrollbar programmatically
+        self.suspend_scroll_event = True
+        self.playback_scrollbar.set(self.position)
+        # Unset suspend_scroll_event after a short delay to avoid jitter
+        self.window.after(50, self._unset_suspend_scroll)
+
+    def _unset_suspend_scroll(self):
+        self.suspend_scroll_event = False
 
     def on_scrollbar_move(self, value: str) -> None:
         """Handle scrollbar movement to adjust playback position."""
-        self.position = int(float(value))
+        if self.suspend_scroll_event:
+            return
+        new_position = float(value)
+        self.position = new_position
         self.update_status_bar()
-        if self.is_playing:
+        # If the user drags the scrollbar while playing or paused, restart playback from the new position.
+        if self.is_playing or self.is_paused:
             pygame.mixer.music.stop()
             self.play()
         self.save_config()
@@ -301,14 +316,14 @@ class BookReader:
                     self.current_file_label.config(text=os.path.basename(self.current_file))
                     self.calculate_duration()
                     self.save_config()
-                    self.error_label.config(text="")
+                    self.set_error_label("")
                     self.status_bar.config(text="Ready")
             else:
                 self.status_bar.config(text="Download cancelled")
                 if os.path.exists(download_path):
                     os.remove(download_path)
         except requests.RequestException as e:
-            self.error_label.config(text=f"Download failed: {str(e)}")
+            self.set_error_label(f"Download failed: {str(e)}")
             self.status_bar.config(text=f"Download failed: {str(e)}")
         finally:
             self.is_processing = False
@@ -414,16 +429,18 @@ class BookReader:
         return None
 
     def update_position(self):
+        """Periodically update playback position using the mixer's get_pos()."""
         if self.is_playing and pygame.mixer.music.get_busy():
-            current_time = time.time()
-            elapsed = current_time - self.play_start_time
-            self.position = self.play_start_position + elapsed
+            # get_pos returns elapsed ms since play() (or unpause) was called.
+            elapsed_ms = pygame.mixer.music.get_pos()
+            if elapsed_ms >= 0:
+                self.position = self.play_start_position + (elapsed_ms / 1000.0)
             self.update_playback_scrollbar()
             self.update_status_bar()
             self.window.after(100, self.update_position)
-        else:
+        # If playback stops naturally, update state
+        elif not self.is_paused:
             self.is_playing = False
-            self.is_paused = False
             self.position = 0
             self.update_playback_scrollbar()
             self.update_status_bar()
@@ -436,10 +453,11 @@ class BookReader:
         pygame.mixer.quit()
         pygame.mixer.init()
         pygame.mixer.music.load(self.current_file)
+        # Start playback from the stored position (in seconds)
         pygame.mixer.music.play(start=self.position)
         self.is_playing = True
         self.is_paused = False
-        self.play_start_time = time.time()
+        # Store the base position for get_pos() calculations.
         self.play_start_position = self.position
         self.update_button_states()
         self.update_status_bar()
@@ -450,24 +468,23 @@ class BookReader:
             pygame.mixer.music.pause()
             self.is_paused = True
             self.is_playing = False
-            self.pause_button.config(state='disabled')
-            self.resume_button.config(state='normal')
+            # Update buttons: disable Pause, enable Resume.
+            self.update_button_states()
             self.update_status_bar()
 
     def resume(self):
-        if self.is_paused and pygame.mixer.music.get_busy():
+        if self.is_paused:
             pygame.mixer.music.unpause()
             self.is_paused = False
             self.is_playing = True
-            self.resume_button.config(state='disabled')
-            self.pause_button.config(state='normal')
-            self.play_start_time = time.time()
+            # When resuming, update our base position using the stored position.
             self.play_start_position = self.position
+            self.update_button_states()
             self.status_bar.config(text="Playing...")
             self.window.after(100, self.update_position)
 
     def stop(self):
-        if pygame.mixer.music.get_busy():
+        if pygame.mixer.music.get_busy() or self.is_paused:
             pygame.mixer.music.stop()
         self.is_playing = False
         self.is_paused = False
@@ -481,7 +498,7 @@ class BookReader:
         if self.current_file:
             total = self.get_audio_duration()
             self.position = min(total, self.position + 10) if total > 0 else self.position + 10
-            if self.is_playing:
+            if self.is_playing or self.is_paused:
                 pygame.mixer.music.stop()
                 self.play()
             else:
@@ -492,7 +509,7 @@ class BookReader:
     def skip_backward(self):
         if self.current_file:
             self.position = max(0, self.position - 10)
-            if self.is_playing:
+            if self.is_playing or self.is_paused:
                 pygame.mixer.music.stop()
                 self.play()
             else:
@@ -509,11 +526,11 @@ class BookReader:
         """Toggle between play, pause, and resume with the spacebar."""
         if not self.current_file:
             return
-        if not self.is_playing and not pygame.mixer.music.get_busy():
+        if not self.is_playing and not self.is_paused and not pygame.mixer.music.get_busy():
             self.play()
         elif self.is_playing:
             self.pause()
-        else:
+        elif self.is_paused:
             self.resume()
 
     def format_time(self, seconds: int) -> str:
@@ -544,7 +561,7 @@ class BookReader:
         total = self.get_audio_duration()
         if self.duration is None and self.current_file:
             self.status_bar.config(text="Calculating duration...")
-        elif self.is_playing or pygame.mixer.music.get_busy():
+        elif self.is_playing or (pygame.mixer.music.get_busy() and not self.is_paused):
             self.status_bar.config(
                 text=f"Playing - Position: {self.format_time(int(self.position))} / Total: {self.format_time(total)} / Remaining: {self.format_time(max(0, total - int(self.position)))}")
         elif self.current_file:
