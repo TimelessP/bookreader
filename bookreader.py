@@ -431,38 +431,34 @@ class BookReader:
         return None
 
     def play_audio(self) -> None:
-        """Play the audio file from the current position with smooth position updates."""
-        # Check if the file exists
-        if not hasattr(self, 'current_file') or not self.current_file or not os.path.exists(self.current_file):
+        """Play the audio file from the current position without looping."""
+        if not self.current_file or not os.path.exists(self.current_file):
             self.error_label.config(text="No valid audio file to play")
             return
 
-        # Load and play the audio file
         try:
-            pygame.mixer.music.load(self.current_file)
-            pygame.mixer.music.play(start=self.position)  # Start at current position (in seconds)
+            pygame.mixer.music.load(self.current_file)  # Load the file once
+            pygame.mixer.music.play(start=self.position)  # Start at the current position (in seconds)
         except pygame.error as e:
-            print(f"Playback error: {e}")
             self.error_label.config(text="Failed to play audio file")
             self.is_playing = False
             self.update_button_states()
             return
 
-        # Playback loop
         self.is_playing = True
         while pygame.mixer.music.get_busy() and self.is_playing:
-            # Get the current position in milliseconds
-            pos_ms = pygame.mixer.music.get_pos()
-            if pos_ms >= 0:  # Returns -1 if not playing
-                self.position = pos_ms / 1000.0  # Convert to seconds
-                self.update_playback_scrollbar()  # Update UI elements
+            # Update position using get_pos()
+            pos_ms = pygame.mixer.music.get_pos()  # Returns time in milliseconds
+            if pos_ms >= 0:
+                self.position += pos_ms / 1000.0  # Convert to seconds and accumulate
+                self.update_playback_scrollbar()  # Update UI if applicable
                 self.update_status_bar()
             self.update_button_states()
-            time.sleep(1.0)  # Update every second to reduce jitter
+            time.sleep(1.0)  # Check every second
 
         # Playback finished or stopped
         self.is_playing = False
-        self.position = 0
+        self.position = 0  # Reset position when done
         self.update_button_states()
         self.update_status_bar()
 
@@ -474,22 +470,29 @@ class BookReader:
         self.status_bar.config(text="Playing...")
         threading.Thread(target=self.play_audio, daemon=True).start()
 
+    def update_button_states(self) -> None:
+        """Update button states based on playback conditions."""
+        self.play_button.config(state='normal' if self.current_file and not self.is_playing else 'disabled')
+        self.pause_button.config(state='normal' if self.is_playing else 'disabled')
+        self.resume_button.config(
+            state='normal' if not self.is_playing and pygame.mixer.music.get_busy() else 'disabled')
+        self.stop_button.config(state='normal' if pygame.mixer.music.get_busy() else 'disabled')
+
     def pause(self) -> None:
         """Pause the current playback."""
         if self.is_playing and pygame.mixer.music.get_busy():
-            pygame.mixer.music.pause()
-            self.is_playing = False
-            self.save_config()
-            self.update_button_states()
-            self.update_status_bar()
+            pygame.mixer.music.pause()  # Pause the audio
+            self.is_playing = False  # Update playing state
+            self.update_button_states()  # Refresh button states
+            self.update_status_bar()  # Update UI
 
     def resume(self) -> None:
         """Resume paused playback."""
         if not self.is_playing and pygame.mixer.music.get_busy():
             pygame.mixer.music.unpause()
             self.is_playing = True
-            self.status_bar.config(text="Playing...")
-            threading.Thread(target=self.play_audio, daemon=True).start()
+            self.update_button_states()
+            self.update_status_bar()
 
     def stop(self) -> None:
         """Stop playback and reset position."""
