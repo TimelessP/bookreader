@@ -4,3 +4,4 @@ requests==2.32.3
 sounddevice==0.5.1
 pygame~=2.6.1
 pydub~=0.25.1
+mutagen~=1.47.0
