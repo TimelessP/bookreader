@@ -67,10 +67,11 @@ class BookReader:
         self.window.title("Book Reader")
         self.window.geometry("400x650")
         self.window.minsize(400, 350)
+        self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         self.tts = TTS()
         self.current_file = None
-        self.duration = None  # Cached duration in seconds
+        self.duration = None
         self.last_folder = str(Path.home())
         self.position = 0
         self.is_playing = False
@@ -80,8 +81,8 @@ class BookReader:
         self.temp_dir = Path(".temp_audio")
         self.temp_dir.mkdir(exist_ok=True)
 
-        self.load_config()
         self.setup_ui()
+        self.load_config()
         self.setup_keybindings()
         if self.current_file:
             self.calculate_duration()
@@ -99,9 +100,11 @@ class BookReader:
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.inner_frame = tk.Frame(self.canvas)
-        self.canvas_window = self.canvas.create_window((0, 0), window=self.inner_frame, anchor=tk.NW)
+        # Removed pack_propagate(0) and set initial width explicitly
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.inner_frame, anchor=tk.NW,
+                                                       width=self.window.winfo_width())
 
-        self.inner_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.inner_frame.bind("<Configure>", self.update_scroll_region)
         self.window.bind("<Configure>", self.on_window_resize)
 
         self.url_entry = tk.Entry(self.inner_frame, width=40)
@@ -132,24 +135,40 @@ class BookReader:
         self.cancel_button = tk.Button(self.inner_frame, text="Cancel", command=self.cancel, state=tk.DISABLED)
         self.cancel_button.pack(fill=tk.X, pady=5)
 
+        # Playback scrollbar (progress bar) packed first among bottom widgets
         self.playback_scrollbar = tk.Scale(self.window, from_=0, to=100, orient=tk.HORIZONTAL,
                                            command=self.on_scrollbar_move)
         self.playback_scrollbar.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
 
+        # Status bar packed last to ensure it's at the very bottom
         self.status_bar = tk.Label(self.window, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.W)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
-        self.update_button_states()
-        self.update_playback_scrollbar()
+        # Force an initial update of the scroll region after widgets are added
+        self.window.after(0, self.update_scroll_region)
+
+    def update_scroll_region(self, event=None) -> None:
+        """Update the canvas scroll region based on the inner_frame's size."""
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def on_window_resize(self, event: tk.Event) -> None:
         """Adjust the canvas window size when the window is resized."""
         self.canvas.itemconfigure(self.canvas_window, width=event.width - self.v_scrollbar.winfo_width())
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self.update_scroll_region()
 
     def setup_keybindings(self) -> None:
         """Set up keyboard shortcuts."""
         self.window.bind("<space>", self.toggle_playback)
+
+    def on_closing(self) -> None:
+        """Handle window closing by stopping playback and processing."""
+        if self.is_playing:
+            self.stop()
+        if self.is_processing:
+            self.cancel()
+            time.sleep(0.5)
+        pygame.mixer.quit()
+        self.window.destroy()
 
     def load_config(self) -> None:
         """Load configuration from a JSON file."""
@@ -160,7 +179,11 @@ class BookReader:
                 self.position = config.get('position', 0)
                 self.last_folder = config.get('last_folder', str(Path.home()))
             if self.current_file and not os.path.exists(self.current_file):
-                self.current_file = None  # Reset if file doesn't exist
+                self.current_file = None
+            self.current_file_label.config(
+                text=os.path.basename(self.current_file) if self.current_file else "No file selected")
+            self.update_button_states()
+            self.update_playback_scrollbar()
 
     def save_config(self) -> None:
         """Save current configuration to a JSON file."""
@@ -182,7 +205,7 @@ class BookReader:
         """Calculate the audio duration using mutagen in a background thread."""
         try:
             audio = mutagen.File(self.current_file)
-            self.duration = int(audio.info.length)  # Duration in seconds
+            self.duration = int(audio.info.length)
         except Exception as e:
             print(f"Error calculating duration: {e}")
             self.duration = 0
@@ -220,6 +243,8 @@ class BookReader:
             self.skip_back_button.config(state=tk.NORMAL if self.current_file else tk.DISABLED)
             self.skip_forward_button.config(state=tk.NORMAL if self.current_file else tk.DISABLED)
             self.cancel_button.config(state=tk.DISABLED)
+        if not self.is_processing and not self.is_playing and not pygame.mixer.music.get_busy():
+            self.status_bar.config(text="Ready")
 
     def update_playback_scrollbar(self) -> None:
         """Update the playback scrollbar based on the current duration and position."""
@@ -410,7 +435,7 @@ class BookReader:
             self.update_playback_scrollbar()
             self.update_status_bar()
             self.update_button_states()
-            time.sleep(0.5)  # Reduced sleep time for smoother updates
+            time.sleep(0.5)
 
         self.is_playing = False
         self.update_button_states()
