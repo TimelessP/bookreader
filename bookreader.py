@@ -59,8 +59,8 @@ class BookReader:
         pygame.mixer.init()
         self.window = tk.Tk()
         self.window.title("Book Reader")
-        self.window.geometry("400x650")  # Minimum height includes controls, scrollbar, and status bar
-        self.window.minsize(400, 350)  # Minimum height for scrollbar and status bar
+        self.window.geometry("400x650")
+        self.window.minsize(400, 350)
 
         self.tts = TTS()
         self.current_file = None
@@ -75,11 +75,12 @@ class BookReader:
         self.load_config()
         self.setup_ui()
         self.setup_keybindings()
+        self.window.protocol("WM_DELETE_WINDOW", self.on_closing)  # Handle window close
 
     def setup_ui(self):
         # Main frame with vertical scrollbar
         self.main_frame = tk.Frame(self.window)
-        self.main_frame.pack(fill=tk.BOTH, expand=True)
+        self.main_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         self.canvas = tk.Canvas(self.main_frame)
         self.v_scrollbar = tk.Scrollbar(self.main_frame, orient=tk.VERTICAL, command=self.canvas.yview)
@@ -89,9 +90,9 @@ class BookReader:
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.inner_frame = tk.Frame(self.canvas)
-        self.canvas.create_window((0, 0), window=self.inner_frame, anchor=tk.NW, width=self.window.winfo_screenwidth())
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.inner_frame, anchor=tk.NW)
 
-        # Bind configure to update scroll region
+        # Bind configure to update scroll region and width
         self.inner_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.window.bind("<Configure>", self.on_window_resize)
 
@@ -126,7 +127,7 @@ class BookReader:
         # Playback scrollbar (outside scrollable area)
         self.playback_scrollbar = tk.Scale(self.window, from_=0, to=100, orient=tk.HORIZONTAL,
                                            command=self.on_scrollbar_move)
-        self.playback_scrollbar.pack(fill=tk.X, side=tk.BOTTOM, pady=5)
+        self.playback_scrollbar.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
 
         # Status bar (outside scrollable area)
         self.status_bar = tk.Label(self.window, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.W)
@@ -136,12 +137,21 @@ class BookReader:
         self.update_playback_scrollbar()
 
     def on_window_resize(self, event):
-        self.canvas.itemconfig(self.canvas.create_window((0, 0), window=self.inner_frame, anchor=tk.NW),
-                               width=event.width)
+        self.canvas.itemconfigure(self.canvas_window, width=event.width - self.v_scrollbar.winfo_width())
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def setup_keybindings(self):
         self.window.bind("<space>", self.toggle_playback)
+
+    def on_closing(self):
+        if self.is_playing:
+            self.stop()
+        if self.is_processing:
+            self.cancel()
+            # Wait briefly for processing thread to finish
+            time.sleep(0.5)
+        pygame.mixer.quit()
+        self.window.destroy()
 
     def load_config(self):
         if self.config_path.exists():
