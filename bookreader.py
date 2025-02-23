@@ -1,3 +1,8 @@
+import contextlib
+with contextlib.redirect_stdout(None):
+    import pygame
+    pygame.mixer.init()
+
 import json
 import os
 import threading
@@ -7,7 +12,6 @@ import wave
 from pathlib import Path
 from tkinter import filedialog
 from typing import Union
-
 import mutagen
 import piper
 import pygame.mixer
@@ -61,8 +65,6 @@ class TTS:
 
 class BookReader:
     def __init__(self):
-        """Initialize the BookReader application."""
-        pygame.mixer.init()
         self.window = tk.Tk()
         self.window.title("Book Reader")
         self.window.geometry("400x650")
@@ -380,66 +382,87 @@ class BookReader:
                 self.error_label.config(text="Text file is empty")
                 return None
 
-            chunks = self.smart_chunk_text(text)
+            chunks = self.smart_chunk_text(text)  # Assuming this splits text into chunks
+            if not chunks:
+                self.error_label.config(text="No valid text chunks to process")
+                return None
+
             wav_files = []
             total_chunks = len(chunks)
 
             for i, chunk in enumerate(chunks):
-                if self.cancel_processing:
+                if self.cancel_processing:  # Assuming cancel flag exists
                     for wav in wav_files:
                         if os.path.exists(wav):
                             os.remove(wav)
                     return None
                 temp_wav = self.temp_dir / f"chunk_{i}.wav"
-                self.tts.synthesize_to_file(chunk, temp_wav)
+                self.tts.synthesize_to_file(chunk, temp_wav)  # Assuming TTS method
                 wav_files.append(temp_wav)
                 self.status_bar.config(text=f"Converting TTS: {i + 1}/{total_chunks} chunks")
                 self.window.update_idletasks()
 
-            if self.cancel_processing:
-                for wav in wav_files:
-                    if os.path.exists(wav):
-                        os.remove(wav)
-                return None
-
             combined = AudioSegment.empty()
             for i, wav in enumerate(wav_files):
-                if self.cancel_processing:
-                    combined = None
-                    break
-                combined += AudioSegment.from_wav(wav)
-                os.remove(wav)
+                try:
+                    segment = AudioSegment.from_wav(wav)
+                    if len(segment) > 0:  # Skip empty segments
+                        combined += segment
+                    else:
+                        print(f"Warning: Empty WAV file {wav}")
+                except Exception as e:
+                    print(f"Error processing WAV file {wav}: {e}")
+                finally:
+                    os.remove(wav)
                 self.status_bar.config(text=f"Combining audio: {i + 1}/{total_chunks} chunks")
                 self.window.update_idletasks()
 
             if combined and not self.cancel_processing:
-                combined.export(output_mp3, format="mp3")
-                return str(output_mp3)
+                try:
+                    combined.export(output_mp3, format="mp3", bitrate="192k")  # Standard bitrate
+                    return str(output_mp3)
+                except Exception as e:
+                    print(f"Error exporting MP3: {e}")
+                    self.error_label.config(text="Failed to export MP3")
+                    return None
             return None
         elif file_path.endswith(('.wav', '.mp3')) and os.path.exists(file_path):
             return file_path
         return None
 
     def play_audio(self) -> None:
-        """Play the audio file from the current position."""
-        if not self.current_file or not os.path.exists(self.current_file):
+        """Play the audio file from the current position with smooth position updates."""
+        # Check if the file exists
+        if not hasattr(self, 'current_file') or not self.current_file or not os.path.exists(self.current_file):
             self.error_label.config(text="No valid audio file to play")
             return
 
-        self.is_playing = True
-        pygame.mixer.music.load(self.current_file)
-        pygame.mixer.music.play(start=self.position)
-
-        start_time = time.time()
-        while pygame.mixer.music.get_busy() and self.is_playing:
-            elapsed = time.time() - start_time
-            self.position = int(self.position + elapsed)
-            self.update_playback_scrollbar()
-            self.update_status_bar()
+        # Load and play the audio file
+        try:
+            pygame.mixer.music.load(self.current_file)
+            pygame.mixer.music.play(start=self.position)  # Start at current position (in seconds)
+        except pygame.error as e:
+            print(f"Playback error: {e}")
+            self.error_label.config(text="Failed to play audio file")
+            self.is_playing = False
             self.update_button_states()
-            time.sleep(0.5)
+            return
 
+        # Playback loop
+        self.is_playing = True
+        while pygame.mixer.music.get_busy() and self.is_playing:
+            # Get the current position in milliseconds
+            pos_ms = pygame.mixer.music.get_pos()
+            if pos_ms >= 0:  # Returns -1 if not playing
+                self.position = pos_ms / 1000.0  # Convert to seconds
+                self.update_playback_scrollbar()  # Update UI elements
+                self.update_status_bar()
+            self.update_button_states()
+            time.sleep(1.0)  # Update every second to reduce jitter
+
+        # Playback finished or stopped
         self.is_playing = False
+        self.position = 0
         self.update_button_states()
         self.update_status_bar()
 
@@ -518,12 +541,11 @@ class BookReader:
         else:
             self.resume()
 
-    def format_time(self, seconds: int) -> str:
-        """Format seconds into HH:MM:SS."""
+    def format_time(self, seconds: float) -> str:
         hours = seconds // 3600
         minutes = (seconds % 3600) // 60
         secs = seconds % 60
-        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        return f"{int(hours):02d}:{int(minutes):02d}:{int(secs):02d}"
 
     def update_status_bar(self) -> None:
         """Update the status bar with current playback information."""
